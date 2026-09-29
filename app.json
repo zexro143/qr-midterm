@@ -7,16 +7,18 @@
     "icon": "./assets/images/icon.png",
     "scheme": "qr-attendance",
     "userInterfaceStyle": "light",
+    "newArchEnabled": true,
     "ios": {
       "supportsTablet": true
     },
     "android": {
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
-        "backgroundImage": "./assets/images/android-icon-background.png"
+        "foregroundImage": "./assets/images/icon.png"
       },
+      "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "package": "com.arespj.QRATT"
+      "package": "com.canete.QRATT"
     },
     "web": {
       "output": "static",
@@ -43,7 +45,7 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "2084f19b-5cc4-4a2f-aa1e-8bd0311427f5"
+        "projectId": "54d424f7-2d42-4620-9e14-6410663933eb"
       }
     }
   }

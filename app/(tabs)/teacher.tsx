@@ -1,8 +1,4 @@
-import Ionicons from "@expo/vector-icons/Ionicons";
-import DateTimePicker, {
-  type DateTimePickerEvent,
-} from "@react-native-community/datetimepicker";
-import { useState } from "react";
+import { useCallback, useState } from 'react';
 import {
   Platform,
   Pressable,
@@ -11,119 +7,130 @@ import {
   Text,
   TextInput,
   View,
-} from "react-native";
-import QRCode from "react-native-qrcode-svg";
+} from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
+import { Ionicons } from '@expo/vector-icons';
+import DateTimePicker, {
+  type DateTimePickerEvent,
+} from '@react-native-community/datetimepicker';
+import QRCode from 'react-native-qrcode-svg';
 
-import AppButton from "@/components/AppButton";
-import { COLORS } from "@/constants/colors";
-import { createEvent } from "@/lib/database";
-
-function toLocalISO(date: Date) {
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return (
-    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
-    `T${pad(date.getHours())}:${pad(date.getMinutes())}:00`
-  );
-}
-
-function formatDateTime(date: Date) {
-  const pad = (n: number) => String(n).padStart(2, "0");
-  const month = date.toLocaleString("en-US", { month: "short" });
-  return `${month} ${pad(date.getDate())}, ${date.getFullYear()} at ${pad(
-    date.getHours(),
-  )}:${pad(date.getMinutes())}`;
-}
-
-const QUICK_END_OPTIONS = [
-  { label: "+30 min", ms: 30 * 60 * 1000 },
-  { label: "+1 hour", ms: 60 * 60 * 1000 },
-  { label: "+2 hours", ms: 2 * 60 * 60 * 1000 },
-];
-
-type EditTarget = "start" | "end";
+import { COLORS } from '@/constants/colors';
+import { useAuth } from '@/lib/auth';
+import { getProfile, type Role } from '@/lib/profiles';
+import { createEvent } from '@/lib/events';
+import { buildQRPayload } from '@/lib/qr';
 
 export default function TeacherScreen() {
-  const [title, setTitle] = useState("");
-  const [eventId, setEventId] = useState("");
-  const [startDate, setStartDate] = useState(() => new Date());
+  const { user } = useAuth();
+  const [role, setRole] = useState<Role | null>(null);
+  const [roleLoading, setRoleLoading] = useState(true);
+
+  const [title, setTitle] = useState('');
+  const [eventId, setEventId] = useState('');
+  const [startDate, setStartDate] = useState(new Date());
   const [endDate, setEndDate] = useState(
-    () => new Date(Date.now() + 60 * 60 * 1000),
+    new Date(Date.now() + 60 * 60 * 1000)
   );
-  const [editTarget, setEditTarget] = useState<EditTarget | null>(null);
-  const [editingPart, setEditingPart] = useState<"date" | "time">("date");
+  const [editTarget, setEditTarget] = useState<'start' | 'end' | null>(null);
+  const [editingPart, setEditingPart] = useState<'date' | 'time'>('date');
   const [payload, setPayload] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
-  const isAndroid = Platform.OS === "android";
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      if (!user) {
+        setRoleLoading(false);
+        return () => {
+          active = false;
+        };
+      }
+      setRoleLoading(true);
+      getProfile(user.id).then((profile) => {
+        if (!active) return;
+        setRole(profile?.role ?? 'student');
+        setRoleLoading(false);
+      });
+      return () => {
+        active = false;
+      };
+    }, [user])
+  );
 
-  const openPicker = (target: EditTarget) => {
-    setMessage(null);
-    setEditTarget(target);
-    setEditingPart("date");
-  };
+  if (roleLoading) {
+    return (
+      <View style={styles.centered}>
+        <Text style={styles.muted}>Checking your account...</Text>
+      </View>
+    );
+  }
 
-  const onPickerChange = (event: DateTimePickerEvent, selected?: Date) => {
-    if (!editTarget) return;
-    if (event.type === "dismissed" || !selected) {
+  if (role !== 'teacher') {
+    return (
+      <View style={styles.centered}>
+        <Ionicons
+          name="lock-closed-outline"
+          size={48}
+          color={COLORS.textSecondary}
+        />
+        <Text style={styles.lockTitle}>Teachers Only</Text>
+        <Text style={styles.muted}>
+          Only teacher accounts can create events.
+        </Text>
+      </View>
+    );
+  }
+
+  const onPickerChange = (
+    event: DateTimePickerEvent,
+    selected?: Date
+  ) => {
+    if (event.type === 'dismissed') {
       setEditTarget(null);
-      setEditingPart("date");
       return;
     }
-
-    const current = editTarget === "start" ? startDate : endDate;
-    const next = new Date(current);
-    next.setFullYear(
-      selected.getFullYear(),
-      selected.getMonth(),
-      selected.getDate(),
-    );
-    next.setHours(selected.getHours(), selected.getMinutes(), 0, 0);
-
-    if (editTarget === "start") setStartDate(next);
-    else setEndDate(next);
-
-    if (isAndroid && editingPart === "date") {
-      setEditingPart("time");
+    if (selected) {
+      if (editTarget === 'start') setStartDate(selected);
+      if (editTarget === 'end') setEndDate(selected);
+    }
+    if (Platform.OS === 'android' && editingPart === 'date') {
+      setEditingPart('time');
     } else {
       setEditTarget(null);
-      setEditingPart("date");
+      setEditingPart('date');
     }
   };
 
-  const handleQuickEnd = (ms: number) => {
-    setMessage(null);
-    setEndDate(new Date(startDate.getTime() + ms));
+  const applyQuickDuration = (minutes: number) => {
+    setEndDate(new Date(startDate.getTime() + minutes * 60 * 1000));
   };
 
   const handleCreateEvent = () => {
-    const event = {
+    setMessage(null);
+    if (!title.trim() || !eventId.trim()) {
+      setMessage('Event title and code are required.');
+      return;
+    }
+    if (startDate >= endDate) {
+      setMessage('Start time must be before end time.');
+      return;
+    }
+    const eventData = {
       eventId: eventId.trim(),
       title: title.trim(),
-      start: toLocalISO(startDate),
-      end: toLocalISO(endDate),
+      start: startDate.toISOString(),
+      end: endDate.toISOString(),
     };
-
-    if (!event.eventId || !event.title) {
-      setMessage("Event title and code are required.");
-      return;
-    }
-
-    if (endDate.getTime() <= startDate.getTime()) {
-      setMessage("End time must be after start time.");
-      return;
-    }
-
-    createEvent(event).then(() => {
-      setMessage("Event saved! Scan the QR with the Scan tab to test it.");
-      setPayload(
-        JSON.stringify({
-          v: 1,
-          event: event.eventId,
-          title: event.title,
-          start: event.start,
-          end: event.end,
-        }),
+    createEvent(eventData).then(({ error }) => {
+      if (error) {
+        setMessage('Could not save the event. Please try again.');
+        return;
+      }
+      setMessage(
+        'Event saved! Ask a student to scan the QR with their own student account to test it.'
       );
+      setPayload(buildQRPayload(eventData));
     });
   };
 
@@ -131,20 +138,16 @@ export default function TeacherScreen() {
     <ScrollView
       style={styles.container}
       contentContainerStyle={styles.content}
-      keyboardShouldPersistTaps="handled"
     >
-      <Text style={styles.title}>Create Event QR</Text>
-      <Text style={styles.subtitle}>
-        Fill in the event details, then scan the generated QR with the Scan tab.
-      </Text>
+      <Text style={styles.heading}>Create Event</Text>
 
       <Text style={styles.label}>Event Title</Text>
       <TextInput
         style={styles.input}
         value={title}
         onChangeText={setTitle}
-        placeholder="e.g. Founders Day Assembly"
-        placeholderTextColor={COLORS.textSecondary}
+        placeholder="Founders Day Assembly"
+        placeholderTextColor={COLORS.muted}
       />
 
       <Text style={styles.label}>Event Code</Text>
@@ -152,97 +155,76 @@ export default function TeacherScreen() {
         style={styles.input}
         value={eventId}
         onChangeText={setEventId}
-        placeholder="e.g. EVT-2026-0002"
-        placeholderTextColor={COLORS.textSecondary}
+        placeholder="EVT-2026-0001"
+        placeholderTextColor={COLORS.muted}
         autoCapitalize="characters"
       />
 
-      <Text style={styles.label}>Starts</Text>
-      <PickerField
-        value={formatDateTime(startDate)}
-        icon="sunny-outline"
-        onPress={() => openPicker("start")}
-      />
+      <Text style={styles.label}>Start Time</Text>
+      <Pressable
+        style={styles.input}
+        onPress={() => {
+          setEditTarget('start');
+          setEditingPart(Platform.OS === 'android' ? 'date' : 'date');
+        }}
+      >
+        <Text style={styles.inputText}>{startDate.toLocaleString()}</Text>
+      </Pressable>
 
-      <Text style={styles.label}>Ends</Text>
-      <PickerField
-        value={formatDateTime(endDate)}
-        icon="moon-outline"
-        onPress={() => openPicker("end")}
-      />
-      <View style={styles.chipRow}>
-        {QUICK_END_OPTIONS.map((option) => (
-          <Pressable
-            key={option.label}
-            style={styles.chip}
-            onPress={() => handleQuickEnd(option.ms)}
-          >
-            <Text style={styles.chipText}>{option.label}</Text>
-          </Pressable>
-        ))}
-      </View>
-      <Text style={styles.hint}>
-        Tap a chip to set the end time from start.
-      </Text>
-
-      {message && <Text style={styles.message}>{message}</Text>}
-
-      <AppButton
-        theme="primary"
-        title="Create Event"
-        icon="add-circle-outline"
-        onPress={handleCreateEvent}
-      />
+      <Text style={styles.label}>End Time</Text>
+      <Pressable
+        style={styles.input}
+        onPress={() => {
+          setEditTarget('end');
+          setEditingPart(Platform.OS === 'android' ? 'date' : 'date');
+        }}
+      >
+        <Text style={styles.inputText}>{endDate.toLocaleString()}</Text>
+      </Pressable>
 
       {editTarget && (
-        <View style={styles.pickerContainer}>
-          <DateTimePicker
-            value={editTarget === "start" ? startDate : endDate}
-            mode={isAndroid ? editingPart : "datetime"}
-            display={isAndroid ? "default" : "spinner"}
-            onChange={onPickerChange}
-          />
-        </View>
+        <DateTimePicker
+          value={editTarget === 'start' ? startDate : endDate}
+          mode={Platform.OS === 'android' ? editingPart : 'datetime'}
+          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+          onChange={onPickerChange}
+        />
       )}
 
-      {payload && (
-        <View style={styles.resultCard}>
-          <Text style={styles.resultTitle}>
-            Scan this QR code with the Scan tab:
-          </Text>
-          <View style={styles.qrBox}>
-            <QRCode value={payload} size={200} />
-          </View>
+      <View style={styles.chipRow}>
+        <Pressable
+          style={styles.chip}
+          onPress={() => applyQuickDuration(30)}
+        >
+          <Text style={styles.chipText}>+30 min</Text>
+        </Pressable>
+        <Pressable
+          style={styles.chip}
+          onPress={() => applyQuickDuration(60)}
+        >
+          <Text style={styles.chipText}>+1 hour</Text>
+        </Pressable>
+        <Pressable
+          style={styles.chip}
+          onPress={() => applyQuickDuration(120)}
+        >
+          <Text style={styles.chipText}>+2 hours</Text>
+        </Pressable>
+      </View>
+
+      <Pressable style={styles.primaryButton} onPress={handleCreateEvent}>
+        <Text style={styles.primaryButtonText}>Create & Generate QR</Text>
+      </Pressable>
+
+      {message ? <Text style={styles.message}>{message}</Text> : null}
+
+      {payload ? (
+        <View style={styles.qrCard}>
+          <QRCode value={payload} size={200} />
           <Text style={styles.payloadText}>{payload}</Text>
         </View>
-      )}
+      ) : null}
     </ScrollView>
-  );
-}
-
-type PickerFieldProps = {
-  value: string;
-  icon: keyof typeof Ionicons.glyphMap;
-  onPress: () => void;
-};
-
-function PickerField({ value, icon, onPress }: PickerFieldProps) {
-  return (
-    <Pressable
-      style={({ pressed }) => [
-        styles.pickerField,
-        pressed && styles.pickerFieldPressed,
-      ]}
-      onPress={onPress}
-    >
-      <Ionicons name={icon} size={20} color={COLORS.primary} />
-      <Text style={styles.pickerValue}>{value}</Text>
-      <Ionicons
-        name="calendar-outline"
-        size={18}
-        color={COLORS.textSecondary}
-      />
-    </Pressable>
   );
 }
 
@@ -252,119 +234,112 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.background,
   },
   content: {
-    paddingHorizontal: 24,
-    paddingTop: 24,
-    paddingBottom: 40,
+    padding: 24,
+    paddingBottom: 48,
   },
-  title: {
-    fontSize: 20,
-    fontWeight: "600",
+  centered: {
+    flex: 1,
+    backgroundColor: COLORS.background,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+    gap: 8,
+  },
+  heading: {
+    fontSize: 22,
+    fontWeight: '700',
     color: COLORS.textPrimary,
-    marginBottom: 4,
+    marginBottom: 16,
   },
-  subtitle: {
+  lockTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: COLORS.textPrimary,
+  },
+  muted: {
     fontSize: 14,
     color: COLORS.textSecondary,
-    lineHeight: 20,
-    marginBottom: 16,
+    textAlign: 'center',
   },
   label: {
     fontSize: 14,
-    fontWeight: "600",
+    fontWeight: '600',
     color: COLORS.textPrimary,
     marginBottom: 6,
     marginTop: 10,
   },
   input: {
     backgroundColor: COLORS.card,
-    borderRadius: 14,
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: COLORS.border,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 15,
-    color: COLORS.textPrimary,
-  },
-  pickerField: {
-    backgroundColor: COLORS.card,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: COLORS.border,
+    borderColor:COLORS.border,
     paddingHorizontal: 14,
     paddingVertical: 14,
-    flexDirection: "row",
-    alignItems: "center",
+    color:COLORS.textPrimary,
   },
-  pickerFieldPressed: {
-    backgroundColor: COLORS.surface,
-  },
-  pickerValue: {
-    flex: 1,
-    fontSize: 15,
-    fontWeight: "500",
+  inputText: {
+    fontSize: 16,
     color: COLORS.textPrimary,
-    marginHorizontal: 10,
   },
   chipRow: {
-    flexDirection: "row",
-    marginTop: 8,
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 12,
   },
   chip: {
-    backgroundColor: COLORS.surface,
-    borderRadius: 999,
-    paddingHorizontal: 14,
-    paddingVertical: 7,
-    marginRight: 8,
+    backgroundColor: COLORS.card,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
   },
   chipText: {
     fontSize: 13,
-    fontWeight: "600",
-    color: COLORS.primary,
+    fontWeight: '600',
+    color: COLORS.textPrimary,
   },
-  hint: {
-    fontSize: 12,
-    color: COLORS.textSecondary,
-    marginTop: 6,
+  primaryButton: {
+    marginTop: 20,
+    backgroundColor: COLORS.primary,
+    borderWidth: 1,
+    borderColor: '#A78BFA',
+    borderRadius: 14,
+    paddingVertical: 16,
+    alignItems: 'center',
+    shadowColor: '#8B5CF6',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.55,
+    shadowRadius: 12,
+    elevation: 8,
   },
-  pickerContainer: {
-    marginTop: 12,
-    alignItems: "center",
+  primaryButtonText: {
+    color: COLORS.textOnPrimary,
+    fontWeight: '700',
+    fontSize: 16,
   },
   message: {
-    fontSize: 14,
-    color: COLORS.primary,
-    textAlign: "center",
     marginTop: 12,
+    fontSize: 14,
+    color: COLORS.textSecondary,
   },
-  resultCard: {
-    backgroundColor: COLORS.card,
-    borderRadius: 14,
-    padding: 16,
+  qrCard: {
     marginTop: 20,
-    alignItems: "center",
-    shadowColor: COLORS.shadow,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  resultTitle: {
-    fontSize: 15,
-    fontWeight: "600",
-    color: COLORS.textPrimary,
-    textAlign: "center",
-    marginBottom: 12,
-  },
-  qrBox: {
-    backgroundColor: "#FFFFFF",
-    padding: 12,
-    borderRadius: 10,
-    marginBottom: 12,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: COLORS.cardBorderNeon,
+    padding: 20,
+    alignItems: 'center',
+    gap: 12,
+    shadowColor: '#D946EF',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.35,
+    shadowRadius: 12,
+    elevation: 6,
   },
   payloadText: {
     fontSize: 12,
-    color: COLORS.textSecondary,
-    textAlign: "center",
-    lineHeight: 16,
+    color: '#4B5563',
   },
 });
